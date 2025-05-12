@@ -1,0 +1,144 @@
+---
+title: "Transcription Machine"
+author: "Thomas Zwiller"
+format:
+  html:
+    toc: true
+    toc-location: left
+    self-contained: true
+jupyter: python3
+---
+
+Importing the needed libraries
+```{python}
+import os
+import subprocess
+from faster_whisper import WhisperModel
+from pydub import AudioSegment
+import re
+from pyannote.core import Segment
+import torch
+from tqdm import tqdm
+from datetime import timedelta
+import time
+```
+
+Reading in Model from Desktop
+```{python}
+def whisper_model(): 
+    # Set a custom directory for saving the model
+    model_dir = "/Users/TomTheIntern/Desktop/Illustrated/Transcription Machine/models--Systran--faster-whisper-large-v3/snapshots/edaa852ec7e145841d8ffdb056a99866b5f0a478"
+    # Load model computer location
+    model = WhisperModel(model_dir, device="cpu", compute_type="float32")
+
+    return model
+```
+
+Normalizes the Audio, Reduces the Noise
+```{python}
+def audio_cleaner(file_path: str):
+    output_file = "cleaned_audio.wav"
+
+    # Reduce steps by doing everything in one ffmpeg command
+    subprocess.run([
+        "ffmpeg", "-y", "-i", file_path,
+        "-ac", "1", "-ar", "16000",  # Convert to mono & 16kHz (best for Whisper)
+        "-filter:a", "afftdn",  # Basic noise reduction (faster than `noisereduce`)
+        output_file
+    ], check=True)
+
+    return output_file
+```
+
+Main Transcription Function
+```{python}
+def transcriber(file_name: str, model, user_named: str): 
+    print("\nTranscription in progress...")
+
+    # Get total duration of audio (for progress tracking)
+    audio_duration = len(AudioSegment.from_file(file_name)) / 1000  # Convert ms to seconds
+
+    segments, info = model.transcribe(file_name,
+                temperature = 0.0,
+                no_repeat_ngram_size = 7, 
+                vad_filter = True, 
+                word_timestamps = True)  
+
+    transcription_text = []
+
+    # Progress bar for processing each segment
+    with tqdm(total=audio_duration, unit="s", desc="Transcribing", dynamic_ncols=True, leave=True) as pbar:
+        start_time = time.time()
+    
+        for segment in segments:
+            text = segment.text
+            transcription_text.append(text)
+
+            pbar.update(segment.end - segment.start)
+
+        # Calculate and show estimated time remaining
+            elapsed_time = time.time() - start_time
+            speed = round(elapsed_time, 2) / round(pbar.n if pbar.n > 0 else 0, 2)
+            remaining_time = (audio_duration - pbar.n) * speed if speed > 0 else 0
+            pbar.set_postfix(ETA=str(timedelta(seconds=int(remaining_time))))
+
+    # Save transcription to file
+    name = '/Users/TomTheIntern/Desktop/ZeLO/Transcription Machine/Output/' + user_named + '.txt'
+
+    replacements = {}
+    for i, text in enumerate(transcription_text):
+        for key, value in replacements.items():
+            text = text.replace(key, value)
+        transcription_text[i] = text
+
+    # Save transcription to a file
+    with open(name, 'w') as file:
+        for line in transcription_text:
+            line = line.strip()  # Remove extra spaces
+            # Check if line is a question (ends with '?')
+            if re.match(r"^(.*?\?)$", line):  
+                file.write("\n\n" + line + "\n\n")  # Add two blank lines before & after the question
+            else:
+                file.write(line + " ")  # Keep spacing between sentences
+```
+
+Code Body
+```{python}
+def main(): 
+    model = whisper_model()
+    print("Model loaded successfully.\n")
+    path = False
+
+    while not path:
+        try:
+            audio_path = str(input('Please enter the path to the audio file or Cancel to end: \n')).strip()
+
+            audio_path = re.sub(r"^['\"]|['\"]$", "", audio_path) 
+
+            if audio_path.lower() == 'cancel' or audio_path.lower() == 'c':
+                print('Program Trial Cancelled')
+                return
+
+            if not os.path.isfile(audio_path):
+                raise FileNotFoundError(f"No such file: '{audio_path}'\n")
+            else:
+                print(f"Audio file found: {audio_path}\n")
+                path = True
+
+        
+        except FileNotFoundError as e:
+            print(e)
+            audio_path = ''
+
+    user_file_name = str(input('Please name your file.'))
+
+    print('Audio being cleaned.')
+    
+    file_name = audio_cleaner(audio_path)
+
+    transcriber(file_name, model, user_file_name)
+
+    print('Task Done!')
+
+main()
+```
